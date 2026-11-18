@@ -3,172 +3,227 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { loadCore } = require('./load-core');
 
-const core = loadCore();
+const G = loadCore();
+const N = G.SIZE;
 
-// 결과에서 표에 보이는 값만 뽑는다.
-function table(text) {
-  return core.summarize(text).questions.map(q => [q.name, q.valid, q.average, q.blank, q.excluded]);
+// 수 목록 [[r, c], ...]을 차례로 둔다(흑부터 번갈아). 둘 수 없는 수가 있으면 실패.
+function playAll(moves, start = G.createGame()) {
+  let s = start;
+  for (const [r, c] of moves) {
+    const res = G.play(s, r, c);
+    assert.ok(res.ok, `둘 수 없음: ${r},${c} (${res.reason})`);
+    s = res.state;
+  }
+  return s;
 }
 
-test('계산 로직은 DOM 없이 실행된다', () => {
-  assert.equal(typeof core.summarize, 'function');
+// 흑·백 돌을 원하는 자리에 놓은 판(차례는 turn). 승리 판정은 하지 않는다.
+function position(black, white, turn = 'B') {
+  const s = G.createGame();
+  for (const [r, c] of black) s.board[r * N + c] = 'B';
+  for (const [r, c] of white) s.board[r * N + c] = 'W';
+  s.turn = turn;
+  return s;
+}
+
+test('판은 10×10, 3개를 이으면 이긴다', () => {
+  assert.equal(G.SIZE, 10);
+  assert.equal(G.WIN_LENGTH, 3);
+  const s = G.createGame();
+  assert.equal(s.board.length, 100);
+  assert.ok(s.board.every(v => v === null));
+  assert.equal(s.turn, 'B');
+  assert.equal(s.winner, null);
 });
 
-test('칸 판정: 1~5만 유효, 앞뒤 공백은 지운다', () => {
-  for (const v of ['1', '2', '3', '4', '5', ' 3', '4 ', '\t5\t', ' 1 ', ' 2　']) {
-    assert.equal(core.classifyCell(v).kind, 'valid', JSON.stringify(v));
+test('흑부터 번갈아 둔다', () => {
+  const s = playAll([[0, 0], [5, 5], [9, 9]]);
+  assert.equal(s.board[0], 'B');
+  assert.equal(s.board[55], 'W');
+  assert.equal(s.board[99], 'B');
+  assert.equal(s.turn, 'W');
+  assert.deepEqual(s.moves.map(m => m.player), ['B', 'W', 'B']);
+});
+
+test('play는 원래 상태를 바꾸지 않는다', () => {
+  const s0 = G.createGame();
+  const res = G.play(s0, 3, 3);
+  assert.ok(res.ok);
+  assert.equal(s0.board[33], null);
+  assert.equal(s0.moves.length, 0);
+});
+
+test('이미 돌이 있는 칸, 판 밖, 정수가 아닌 좌표에는 둘 수 없다', () => {
+  const s = playAll([[2, 2]]);
+  assert.equal(G.play(s, 2, 2).reason, 'occupied');
+  for (const [r, c] of [[-1, 0], [0, -1], [10, 0], [0, 10], [1.5, 2], ['1', 2], [NaN, 0]]) {
+    assert.equal(G.play(s, r, c).reason, 'outside', JSON.stringify([r, c]));
   }
-  assert.equal(core.classifyCell(' 3 ').value, 3);
 });
 
-test('칸 판정: 비었거나 공백뿐이면 빈 응답', () => {
-  for (const v of ['', ' ', '   ', '　', undefined]) {
-    assert.equal(core.classifyCell(v).kind, 'blank', JSON.stringify(v));
+test('가로 3개로 이긴다', () => {
+  const s = playAll([[4, 3], [0, 0], [4, 4], [0, 9], [4, 5]]);
+  assert.equal(s.winner, 'B');
+  assert.deepEqual(s.winLine, [[4, 3], [4, 4], [4, 5]]);
+});
+
+test('세로 3개로 이긴다(백)', () => {
+  const s = playAll([[0, 0], [7, 2], [0, 5], [8, 2], [9, 9], [9, 2]]);
+  assert.equal(s.winner, 'W');
+  assert.deepEqual(s.winLine, [[7, 2], [8, 2], [9, 2]]);
+});
+
+test('↘ 대각선 3개로 이긴다', () => {
+  const s = playAll([[0, 0], [9, 0], [1, 1], [9, 1], [2, 2]]);
+  assert.equal(s.winner, 'B');
+  assert.deepEqual(s.winLine, [[0, 0], [1, 1], [2, 2]]);
+});
+
+test('↙ 대각선 3개로 이긴다(판 오른쪽 위 모서리)', () => {
+  const s = playAll([[0, 9], [5, 5], [1, 8], [5, 6], [2, 7]]);
+  assert.equal(s.winner, 'B');
+  assert.deepEqual(s.winLine, [[0, 9], [1, 8], [2, 7]]);
+});
+
+test('가운데 칸을 마지막에 메워도 이긴다', () => {
+  const s = playAll([[3, 3], [0, 0], [3, 5], [0, 9], [3, 4]]);
+  assert.equal(s.winner, 'B');
+  assert.deepEqual(s.winLine, [[3, 3], [3, 4], [3, 5]]);
+});
+
+test('4개 이상 이어져도 승리이고 줄 전체를 돌려준다', () => {
+  const s = position([[6, 1], [6, 2], [6, 4], [6, 5]], []);
+  const res = G.play(s, 6, 3);
+  assert.equal(res.state.winner, 'B');
+  assert.deepEqual(res.state.winLine, [[6, 1], [6, 2], [6, 3], [6, 4], [6, 5]]);
+});
+
+test('줄이 판 가장자리에서 끊기면 이어지지 않는다', () => {
+  // (0,9) 다음 칸은 (1,0)이 아니다(1차원 배열로 넘어가지 않는지)
+  const s = playAll([[0, 8], [5, 5], [0, 9], [5, 7], [1, 0]]);
+  assert.equal(s.winner, null);
+});
+
+test('2개만으로는 이기지 않는다', () => {
+  const s = playAll([[5, 5], [0, 0], [5, 6]]);
+  assert.equal(s.winner, null);
+  assert.deepEqual(s.winLine, []);
+});
+
+test('끝난 판에는 더 둘 수 없다', () => {
+  const s = playAll([[4, 3], [0, 0], [4, 4], [0, 9], [4, 5]]);
+  assert.equal(G.play(s, 9, 9).reason, 'over');
+});
+
+test('승자 없이 100칸이 차면 무승부', () => {
+  // 짝수 행은 BBWW…, 홀수 행은 WWBB… 무늬. 어느 방향으로도 같은 색 3개가 이어지지 않는다.
+  const color = (r, c) => (Math.floor((c + 2 * (r % 2)) / 2) % 2 === 0 ? 'B' : 'W');
+  const blacks = [];
+  const whites = [];
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) (color(r, c) === 'B' ? blacks : whites).push([r, c]);
+  assert.equal(blacks.length, 50);
+  const moves = [];
+  for (let i = 0; i < 50; i++) moves.push(blacks[i], whites[i]);
+  const s = playAll(moves);
+  assert.equal(s.moves.length, 100);
+  assert.equal(s.winner, 'draw');
+  assert.deepEqual(s.winLine, []);
+});
+
+test('무르기: 한 수, 여러 수, 처음보다 더 무르기', () => {
+  const s = playAll([[1, 1], [2, 2], [3, 3]]);
+  const u1 = G.undo(s);
+  assert.equal(u1.moves.length, 2);
+  assert.equal(u1.board[33], null);
+  assert.equal(u1.turn, 'B');
+  const u2 = G.undo(s, 2);
+  assert.equal(u2.moves.length, 1);
+  assert.equal(u2.turn, 'W');
+  assert.deepEqual(G.undo(s, 5), G.createGame());
+});
+
+test('무르기는 승리도 되돌린다', () => {
+  const s = playAll([[4, 3], [0, 0], [4, 4], [0, 9], [4, 5]]);
+  const u = G.undo(s);
+  assert.equal(u.winner, null);
+  assert.deepEqual(u.winLine, []);
+  assert.ok(G.play(u, 9, 9).ok);
+});
+
+test('컴퓨터: 빈 판에서는 가운데 근처에 둔다', () => {
+  assert.deepEqual(G.chooseMove(G.createGame()), { row: 4, col: 4 });
+});
+
+test('컴퓨터: 이길 수 있으면 이긴다(막는 것보다 먼저)', () => {
+  // 백 차례. 백은 (2,2)에 두면 이기고, 흑도 (7,5)에 두면 이기는 판.
+  const s = position([[7, 3], [7, 4]], [[2, 0], [2, 1]], 'W');
+  assert.deepEqual(G.chooseMove(s), { row: 2, col: 2 });
+});
+
+test('컴퓨터: 상대가 바로 이길 칸을 막는다', () => {
+  const s = position([[5, 5], [6, 6]], [[0, 0]], 'W');
+  const m = G.chooseMove(s);
+  assert.ok([[4, 4], [7, 7]].some(([r, c]) => m.row === r && m.col === c), JSON.stringify(m));
+});
+
+test('컴퓨터: 이길 칸이 두 곳 생기는 수(양쪽 위협)를 찾는다', () => {
+  // 흑 (5,5)만 있고 백 돌은 멀리. 흑이 붙여 두면 양 끝 두 칸이 이기는 칸이 된다.
+  const s = position([[5, 5]], [[0, 0]], 'B');
+  const m = G.chooseMove(s);
+  const after = G.play(s, m.row, m.col).state;
+  // 그 뒤 백이 어디를 막든 흑이 이긴다
+  let wins = 0;
+  for (let i = 0; i < 100; i++) {
+    if (after.board[i]) continue;
+    after.board[i] = 'B';
+    const r = Math.floor(i / N);
+    if (G.findWin(after.board, r, i % N).length) wins++;
+    after.board[i] = null;
+  }
+  assert.ok(wins >= 2, `이기는 칸 ${wins}개`);
+});
+
+test('컴퓨터: 상대의 양쪽 위협 자리를 미리 막는다', () => {
+  // 흑 (5,5)가 있고 백 차례. 백이 아무 데나 두면 흑이 양쪽 위협을 만든다.
+  // 백은 흑이 위협을 만들 수 있는 칸 중 하나(흑 돌 옆)에 둬야 한다.
+  const s = position([[5, 5]], [], 'W');
+  const m = G.chooseMove(s);
+  assert.ok(Math.abs(m.row - 5) <= 2 && Math.abs(m.col - 5) <= 2, JSON.stringify(m));
+});
+
+test('컴퓨터: 빈 칸에만 두고, 같은 판이면 같은 수를 고른다', () => {
+  let s = G.createGame();
+  for (let i = 0; i < 6 && !s.winner; i++) {
+    const m = G.chooseMove(s);
+    assert.deepEqual(G.chooseMove(s), m);
+    assert.equal(s.board[m.row * N + m.col], null);
+    s = G.play(s, m.row, m.col).state;
   }
 });
 
-test('칸 판정: 그 밖의 값은 제외', () => {
-  for (const v of ['0', '6', '10', '3.0', '3.5', '-1', '+3', '03', '１', '3점', 'N/A', '3 4', 'abc', '"3"']) {
-    assert.equal(core.classifyCell(v).kind, 'excluded', JSON.stringify(v));
+test('컴퓨터: 끝난 판에서는 null', () => {
+  const s = playAll([[4, 3], [0, 0], [4, 4], [0, 9], [4, 5]]);
+  assert.equal(G.chooseMove(s), null);
+});
+
+test('컴퓨터끼리 두면 선수(흑)가 이긴다', () => {
+  let s = G.createGame();
+  while (!s.winner) {
+    const m = G.chooseMove(s);
+    s = G.play(s, m.row, m.col).state;
   }
+  assert.equal(s.winner, 'B');
+  assert.ok(s.moves.length <= 7, `${s.moves.length}수`);
 });
 
-test('평균: 소수 셋째 자리에서 반올림해 둘째 자리까지', () => {
-  assert.equal(core.formatAverage(0, 0), '-');
-  assert.equal(core.formatAverage(9, 3), '3.00');
-  assert.equal(core.formatAverage(10, 3), '3.33'); // 3.333…
-  assert.equal(core.formatAverage(11, 3), '3.67'); // 3.666…
-  assert.equal(core.formatAverage(7, 2), '3.50');
-  assert.equal(core.formatAverage(5, 1), '5.00');
-  assert.equal(core.formatAverage(1, 1), '1.00');
-  // 셋째 자리가 정확히 5면 올린다: 2.675 → 2.68 (부동소수점이면 2.67이 되기 쉽다)
-  assert.equal(core.formatAverage(107, 40), '2.68');
-  // 1.005 → 1.01
-  assert.equal(core.formatAverage(201, 200), '1.01');
-  // 4.995 → 5.00
-  assert.equal(core.formatAverage(999, 200), '5.00');
-  // 1.125 → 1.13
-  assert.equal(core.formatAverage(9, 8), '1.13');
-  // 1.124 → 1.12
-  assert.equal(core.formatAverage(281, 250), '1.12');
-});
-
-test('기본 집계: 첫 열은 집계하지 않는다', () => {
-  const text = [
-    '응답번호\t만족도\t추천',
-    '1\t5\t4',
-    '2\t3\t2',
-    '3\t4\t5',
-  ].join('\r\n') + '\r\n';
-  assert.deepEqual(table(text), [
-    ['만족도', 3, '4.00', 0, 0],
-    ['추천', 3, '3.67', 0, 0],
-  ]);
-  assert.equal(core.summarize(text).responseRows, 3);
-});
-
-test('유효·빈 응답·제외가 섞인 경우', () => {
-  const text = [
-    '번호\tQ1\tQ2\tQ3',
-    '1\t5\t \tabc',
-    '2\t 4 \t\t3',
-    '3\t6\t2\t',
-    '4\t3.0\t1\t１',
-  ].join('\n');
-  assert.deepEqual(table(text), [
-    ['Q1', 2, '4.50', 0, 2],
-    ['Q2', 2, '1.50', 2, 0],
-    ['Q3', 1, '3.00', 1, 2],
-  ]);
-});
-
-test('유효 응답이 0이면 평균은 "-"', () => {
-  const text = '번호\tQ1\tQ2\n1\t\tx\n2\t \t0\n';
-  assert.deepEqual(table(text), [
-    ['Q1', 0, '-', 2, 0],
-    ['Q2', 0, '-', 0, 2],
-  ]);
-});
-
-test('칸이 모자란 줄은 모자란 칸을 빈 응답으로 센다', () => {
-  const text = '번호\tQ1\tQ2\tQ3\n1\t5\n2\t4\t3\n3\n';
-  assert.deepEqual(table(text), [
-    ['Q1', 2, '4.50', 1, 0],
-    ['Q2', 1, '3.00', 2, 0],
-    ['Q3', 0, '-', 3, 0],
-  ]);
-  const s = core.summarize(text);
-  assert.equal(s.shortRows, 3); // 세 줄 모두 4칸보다 적다
-  assert.equal(s.responseRows, 3);
-});
-
-test('칸이 넘치는 줄은 넘치는 칸을 집계하지 않는다', () => {
-  const text = '번호\tQ1\n1\t5\t1\t1\n2\t3\n';
-  assert.deepEqual(table(text), [['Q1', 2, '4.00', 0, 0]]);
-  assert.equal(core.summarize(text).longRows, 1);
-});
-
-test('끝의 빈 줄은 버리고, 중간의 빈 줄은 모자란 줄로 센다', () => {
-  const text = '번호\tQ1\tQ2\n1\t5\t5\n\n2\t3\t3\n\n\n';
-  const s = core.summarize(text);
-  assert.equal(s.responseRows, 3);
-  assert.equal(s.emptyRows, 1);
-  assert.deepEqual(table(text), [
-    ['Q1', 2, '4.00', 1, 0],
-    ['Q2', 2, '4.00', 1, 0],
-  ]);
-});
-
-test('줄바꿈 \\r\\n, \\n, \\r 모두 처리한다', () => {
-  const expected = [['Q1', 2, '3.00', 0, 0]];
-  assert.deepEqual(table('번호\tQ1\r\n1\t2\r\n2\t4\r\n'), expected);
-  assert.deepEqual(table('번호\tQ1\n1\t2\n2\t4\n'), expected);
-  assert.deepEqual(table('번호\tQ1\r1\t2\r2\t4\r'), expected);
-});
-
-test('엑셀 따옴표 칸: 칸 안의 줄바꿈·탭이 줄을 나누지 않는다', () => {
-  const text = '번호\tQ1\tQ2\n1\t"여러\n줄"\t5\n2\t"a\tb"\t4\n3\t"say ""hi"""\t3\n';
-  const rows = core.parseTable(text);
-  assert.equal(rows.length, 4);
-  assert.equal(rows[1][1], '여러\n줄');
-  assert.equal(rows[2][1], 'a\tb');
-  assert.equal(rows[3][1], 'say "hi"');
-  assert.deepEqual(table(text), [
-    ['Q1', 0, '-', 0, 3],
-    ['Q2', 3, '4.00', 0, 0],
-  ]);
-});
-
-test('문항 이름은 앞뒤 공백을 지우고, 비면 (N열)로 표시한다', () => {
-  const text = '번호\t 만족 \t\tQ3\n1\t1\t2\t3\n';
-  assert.deepEqual(core.summarize(text).questions.map(q => q.name), ['만족', '(3열)', 'Q3']);
-});
-
-test('응답 줄이 없으면 모두 0, 평균 "-"', () => {
-  const s = core.summarize('번호\tQ1\tQ2\r\n');
-  assert.equal(s.responseRows, 0);
-  assert.deepEqual(table('번호\tQ1\tQ2\r\n'), [
-    ['Q1', 0, '-', 0, 0],
-    ['Q2', 0, '-', 0, 0],
-  ]);
-});
-
-test('빈 입력·머리글이 한 칸뿐이면 문항이 없다', () => {
-  assert.deepEqual(core.summarize('').questions, []);
-  assert.deepEqual(core.summarize('\n\n').questions, []);
-  assert.deepEqual(core.summarize('응답번호\n1\n2\n').questions, []);
-  assert.deepEqual(core.summarize(null).questions, []);
-});
-
-test('응답 번호 열의 값은 결과에 영향이 없다', () => {
-  const a = table('번호\tQ1\n1\t5\n2\t3\n');
-  const b = table('번호\tQ1\nx\t5\n\t3\n');
-  assert.deepEqual(a, b);
-});
-
-test('많은 줄도 정확히 센다', () => {
-  const lines = ['번호\tQ1'];
-  for (let i = 1; i <= 1000; i++) lines.push(i + '\t' + ((i % 5) + 1));
-  // 1~5가 각각 200번: 합 3000, 평균 3.00
-  assert.deepEqual(table(lines.join('\n')), [['Q1', 1000, '3.00', 0, 0]]);
+test('컴퓨터: 거의 찬 판에서도 남은 빈 칸을 고른다', () => {
+  const color = (r, c) => (Math.floor((c + 2 * (r % 2)) / 2) % 2 === 0 ? 'B' : 'W');
+  const b = [];
+  const w = [];
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) {
+    if (r === 9 && c === 9) continue;
+    (color(r, c) === 'B' ? b : w).push([r, c]);
+  }
+  const s = position(b, w, color(9, 9));
+  assert.deepEqual(G.chooseMove(s), { row: 9, col: 9 });
 });

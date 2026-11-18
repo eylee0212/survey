@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>10×10 삼목</title>
+</head>
+<body>
+<script id="game-core">
+// 게임 로직: 화면(DOM)을 모르는 순수 함수만 둔다.
+var GameCore = (function () {
+  'use strict';
+
+  var SIZE = 10;
+  var WIN_LENGTH = 3;
+  var BLACK = 'B';
+  var WHITE = 'W';
+  var DIRECTIONS = [[0, 1], [1, 0], [1, 1], [1, -1]]; // 가로, 세로, ↘, ↙
+
+  function other(player) { return player === BLACK ? WHITE : BLACK; }
+  function inside(r, c) { return r >= 0 && r < SIZE && c >= 0 && c < SIZE; }
+  function at(board, r, c) { return board[r * SIZE + c]; }
+
+  function createGame() {
+    var board = [];
+    for (var i = 0; i < SIZE * SIZE; i++) board.push(null);
+    return { board: board, turn: BLACK, moves: [], winner: null, winLine: [] };
+  }
+
+  // (row, col)에 놓인 돌을 지나는 연속 줄 중 WIN_LENGTH 이상인 첫 줄의 칸들. 없으면 [].
+  function findWin(board, row, col) {
+    var player = at(board, row, col);
+    if (!player) return [];
+    for (var d = 0; d < DIRECTIONS.length; d++) {
+      var dr = DIRECTIONS[d][0];
+      var dc = DIRECTIONS[d][1];
+      var r = row;
+      var c = col;
+      while (inside(r - dr, c - dc) && at(board, r - dr, c - dc) === player) { r -= dr; c -= dc; }
+      var line = [];
+      while (inside(r, c) && at(board, r, c) === player) { line.push([r, c]); r += dr; c += dc; }
+      if (line.length >= WIN_LENGTH) return line;
+    }
+    return [];
+  }
+
+  // 둘 수 있으면 새 상태를, 아니면 이유와 함께 원래 상태를 돌려준다. 원래 상태는 바꾸지 않는다.
+  function play(state, row, col) {
+    if (state.winner) return { ok: false, reason: 'over', state: state };
+    if (!Number.isInteger(row) || !Number.isInteger(col) || !inside(row, col)) {
+      return { ok: false, reason: 'outside', state: state };
+    }
+    if (at(state.board, row, col)) return { ok: false, reason: 'occupied', state: state };
+
+    var board = state.board.slice();
+    board[row * SIZE + col] = state.turn;
+    var moves = state.moves.concat([{ row: row, col: col, player: state.turn }]);
+    var winLine = findWin(board, row, col);
+    var winner = null;
+    if (winLine.length) winner = state.turn;
+    else if (moves.length === SIZE * SIZE) winner = 'draw';
+
+    return {
+      ok: true,
+      state: { board: board, turn: other(state.turn), moves: moves, winner: winner, winLine: winLine }
+    };
+  }
+
+  // 마지막 count수를 무른다.
+  function undo(state, count) {
+    var keep = Math.max(0, state.moves.length - (count === undefined ? 1 : count));
+    var s = createGame();
+    for (var i = 0; i < keep; i++) s = play(s, state.moves[i].row, state.moves[i].col).state;
+    return s;
+  }
+
+  // --- 컴퓨터 ---
+
+  // player가 지금 두면 바로 이기는 빈 칸 번호들
+  function winningCells(board, player) {
+    var cells = [];
+    for (var i = 0; i < board.length; i++) {
+      if (board[i]) continue;
+      board[i] = player;
+      if (findWin(board, Math.floor(i / SIZE), i % SIZE).length) cells.push(i);
+      board[i] = null;
+    }
+    return cells;
+  }
+
+  // idx에 player가 두었을 때 생기는 '바로 이기는 칸' 수
+  function threatsAfter(board, idx, player) {
+    board[idx] = player;
+    var n = winningCells(board, player).length;
+    board[idx] = null;
+    return n;
+  }
+
+  function neighbors(board, idx) {
+    var r = Math.floor(idx / SIZE);
+    var c = idx % SIZE;
+    var n = 0;
+    for (var dr = -1; dr <= 1; dr++) {
+      for (var dc = -1; dc <= 1; dc++) {
+        if ((dr || dc) && inside(r + dr, c + dc) && at(board, r + dr, c + dc)) n++;
+      }
+    }
+    return n;
+  }
+
+  function centerDistance(idx) {
+    var mid = (SIZE - 1) / 2;
+    var r = Math.floor(idx / SIZE);
+    var c = idx % SIZE;
+    return Math.abs(r - mid) + Math.abs(c - mid);
+  }
+
+  // 후보 중 점수가 가장 높은 칸. 동점이면 번호가 작은(위·왼쪽) 칸.
+  function best(cells, score) {
+    var bestIdx = -1;
+    var bestScore = -Infinity;
+    for (var i = 0; i < cells.length; i++) {
+      var s = score(cells[i]);
+      if (s > bestScore) { bestScore = s; bestIdx = cells[i]; }
+    }
+    return bestIdx;
+  }
+
+  // 차례인 쪽이 둘 칸 {row, col}. 둘 곳이 없거나 끝난 판이면 null.
+  function chooseMove(state) {
+    if (state.winner) return null;
+    var board = state.board.slice();
+    var me = state.turn;
+    var opp = other(me);
+    var empty = [];
+    for (var i = 0; i < board.length; i++) if (!board[i]) empty.push(i);
+    if (!empty.length) return null;
+
+    function general(idx) {
+      return threatsAfter(board, idx, me) * 10 +
+        threatsAfter(board, idx, opp) * 8 +
+        neighbors(board, idx) * 2 -
+        centerDistance(idx) * 0.1;
+    }
+
+    var pick = -1;
+    var myWins = winningCells(board, me);
+    if (myWins.length) pick = myWins[0];
+
+    if (pick < 0) {
+      var oppWins = winningCells(board, opp);
+      if (oppWins.length) pick = best(oppWins, general);
+    }
+
+    if (pick < 0) {
+      var myForks = empty.filter(function (idx) { return threatsAfter(board, idx, me) >= 2; });
+      if (myForks.length) pick = best(myForks, general);
+    }
+
+    if (pick < 0) {
+      var oppForks = empty.filter(function (idx) { return threatsAfter(board, idx, opp) >= 2; });
+      if (oppForks.length) pick = best(oppForks, general);
+    }
+
+    if (pick < 0) pick = best(empty, general);
+    return { row: Math.floor(pick / SIZE), col: pick % SIZE };
+  }
+
+  return {
+    SIZE: SIZE,
+    WIN_LENGTH: WIN_LENGTH,
+    BLACK: BLACK,
+    WHITE: WHITE,
+    createGame: createGame,
+    play: play,
+    undo: undo,
+    findWin: findWin,
+    chooseMove: chooseMove
+  };
+})();
+</script>
+</body>
+</html>

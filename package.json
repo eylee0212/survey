@@ -1,0 +1,9 @@
+{
+  "name": "tic-tac-toe-10x10",
+  "version": "1.0.0",
+  "private": true,
+  "description": "10×10 판에서 3개를 먼저 잇는 삼목 게임, index.html 한 장",
+  "scripts": {
+    "test": "node --test"
+  }
+}

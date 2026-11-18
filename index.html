@@ -3,9 +3,161 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>10×10 삼목</title>
+<style>
+  :root {
+    --bg: #f7f5f0;
+    --fg: #1f1d1a;
+    --muted: #6a645b;
+    --line: #d9d3c7;
+    --panel: #ffffff;
+    --accent: #2457c5;
+    --board: #e3bf7f;
+    --grid: #7a5a2b;
+    --win: #d93a2b;
+    color-scheme: light dark;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181b;
+      --fg: #ebe8e2;
+      --muted: #a39d93;
+      --line: #3b3d43;
+      --panel: #222429;
+      --accent: #8fb0ff;
+      --board: #b8925a;
+      --grid: #4e3816;
+      --win: #ff6b5b;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 560px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  .lead { color: var(--muted); margin: 0 0 16px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .controls label { font-weight: 600; }
+  select, button {
+    font: inherit;
+    padding: 6px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--panel);
+    color: var(--fg);
+  }
+  button { cursor: pointer; }
+  button:disabled { opacity: 0.45; cursor: default; }
+  .controls .spacer { flex: 1; }
+  .status {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 1.6em;
+  }
+  .chip {
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    border-radius: 50%;
+    border: 1px solid #8a8a8a;
+    flex: none;
+  }
+  .chip.B { background: #111; }
+  .chip.W { background: #fff; }
+  .chip[hidden] { display: none; }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(10, 1fr);
+    width: 100%;
+    max-width: 528px;
+    aspect-ratio: 1;
+    background: var(--board);
+    border: 2px solid var(--grid);
+    border-radius: 4px;
+    touch-action: manipulation;
+  }
+  .cell {
+    position: relative;
+    border: 0;
+    border-right: 1px solid var(--grid);
+    border-bottom: 1px solid var(--grid);
+    border-radius: 0;
+    padding: 0;
+    background: transparent;
+    cursor: pointer;
+    min-width: 0;
+  }
+  .cell:nth-child(10n) { border-right: 0; }
+  .cell:nth-child(n+91) { border-bottom: 0; }
+  .cell:hover:not(.B):not(.W) { background: rgba(255, 255, 255, 0.25); }
+  .cell:focus-visible { outline: 3px solid var(--accent); outline-offset: -3px; z-index: 1; }
+  .cell.B::after, .cell.W::after {
+    content: "";
+    position: absolute;
+    inset: 12%;
+    border-radius: 50%;
+  }
+  .cell.B::after { background: radial-gradient(circle at 35% 30%, #555, #0d0d0d 70%); }
+  .cell.W::after { background: radial-gradient(circle at 35% 30%, #fff, #d6d6d6 75%); box-shadow: 0 0 0 1px #8a8a8a; }
+  .cell.last::before {
+    content: "";
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 22%; height: 22%;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: var(--win);
+    z-index: 1;
+  }
+  .cell.win::after { box-shadow: 0 0 0 3px var(--win); }
+  .board.busy .cell { cursor: progress; }
+  .board.over .cell { cursor: default; }
+  .rules { color: var(--muted); font-size: 0.9rem; padding-left: 1.2em; margin-top: 20px; }
+  .sr-only {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+</style>
 </head>
 <body>
+<main>
+  <h1>10×10 삼목</h1>
+  <p class="lead">가로·세로·대각선으로 자기 돌 3개를 먼저 이으면 이깁니다. 흑이 먼저 둡니다.</p>
+
+  <div class="controls">
+    <label for="mode">상대</label>
+    <select id="mode">
+      <option value="pvp">두 사람 (한 기기)</option>
+      <option value="cpu-white">컴퓨터 (내가 흑·먼저)</option>
+      <option value="cpu-black">컴퓨터 (컴퓨터가 흑·먼저)</option>
+    </select>
+    <span class="spacer"></span>
+    <button type="button" id="undo">무르기</button>
+    <button type="button" id="restart">새 게임</button>
+  </div>
+
+  <p class="status"><span class="chip" id="chip" aria-hidden="true"></span><span id="status" aria-live="polite"></span></p>
+
+  <div class="board" id="board" role="group" aria-label="10×10 판. 방향키로 칸을 옮기고 Enter나 Space로 둡니다."></div>
+
+  <ul class="rules">
+    <li>4개 이상 이어져도 승리입니다.</li>
+    <li>승자 없이 100칸이 모두 차면 무승부입니다.</li>
+    <li>컴퓨터와 둘 때 무르기를 누르면 컴퓨터의 수까지 함께 물러 다시 내 차례가 됩니다.</li>
+  </ul>
+</main>
+
 <script id="game-core">
 // 게임 로직: 화면(DOM)을 모르는 순수 함수만 둔다.
 var GameCore = (function () {
@@ -177,6 +329,172 @@ var GameCore = (function () {
     findWin: findWin,
     chooseMove: chooseMove
   };
+})();
+</script>
+<script id="game-ui">
+// 화면: 상태를 GameCore로 바꾸고 판을 다시 그린다.
+(function () {
+  'use strict';
+  var G = GameCore;
+  var N = G.SIZE;
+  var NAMES = { B: '흑', W: '백' };
+  var CPU_DELAY = 300;
+
+  var boardEl = document.getElementById('board');
+  var statusEl = document.getElementById('status');
+  var chipEl = document.getElementById('chip');
+  var modeEl = document.getElementById('mode');
+  var undoBtn = document.getElementById('undo');
+  var restartBtn = document.getElementById('restart');
+
+  var state = G.createGame();
+  var focusIdx = 44;
+  var cpuTimer = null;
+  var cells = [];
+
+  for (var i = 0; i < N * N; i++) {
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cell';
+    b.dataset.idx = String(i);
+    b.tabIndex = -1;
+    boardEl.appendChild(b);
+    cells.push(b);
+  }
+
+  function cpuColor() {
+    if (modeEl.value === 'cpu-white') return 'W';
+    if (modeEl.value === 'cpu-black') return 'B';
+    return null;
+  }
+  function cpuTurn() { return !state.winner && state.turn === cpuColor(); }
+
+  function render() {
+    var winSet = {};
+    for (var w = 0; w < state.winLine.length; w++) winSet[state.winLine[w][0] * N + state.winLine[w][1]] = true;
+    var last = state.moves.length ? state.moves[state.moves.length - 1] : null;
+    var lastIdx = last ? last.row * N + last.col : -1;
+
+    for (var i = 0; i < cells.length; i++) {
+      var v = state.board[i];
+      var cls = 'cell';
+      if (v) cls += ' ' + v;
+      if (i === lastIdx) cls += ' last';
+      if (winSet[i]) cls += ' win';
+      cells[i].className = cls;
+      cells[i].tabIndex = i === focusIdx ? 0 : -1;
+      var label = (Math.floor(i / N) + 1) + '행 ' + (i % N + 1) + '열, ' + (v ? NAMES[v] : '빈 칸');
+      if (winSet[i]) label += ', 승리 줄';
+      cells[i].setAttribute('aria-label', label);
+    }
+
+    boardEl.classList.toggle('busy', cpuTurn());
+    boardEl.classList.toggle('over', !!state.winner);
+
+    var cpu = cpuColor();
+    if (state.winner === 'draw') {
+      chipEl.hidden = true;
+      statusEl.textContent = '무승부입니다.';
+    } else if (state.winner) {
+      chipEl.hidden = false;
+      chipEl.className = 'chip ' + state.winner;
+      var who = NAMES[state.winner];
+      if (cpu) who = state.winner === cpu ? '컴퓨터(' + who + ')' : '나(' + who + ')';
+      statusEl.textContent = who + ' 승리!';
+    } else {
+      chipEl.hidden = false;
+      chipEl.className = 'chip ' + state.turn;
+      if (cpu && state.turn === cpu) statusEl.textContent = '컴퓨터(' + NAMES[cpu] + ')가 두는 중…';
+      else if (cpu) statusEl.textContent = '내 차례(' + NAMES[state.turn] + ')';
+      else statusEl.textContent = NAMES[state.turn] + ' 차례';
+    }
+
+    undoBtn.disabled = undoCount() === 0;
+  }
+
+  // 무를 수의 개수. 컴퓨터 상대면 내 마지막 수까지(그 뒤 컴퓨터 수 포함) 무른다.
+  function undoCount() {
+    var cpu = cpuColor();
+    if (!cpu) return state.moves.length ? 1 : 0;
+    for (var i = state.moves.length - 1; i >= 0; i--) {
+      if (state.moves[i].player !== cpu) return state.moves.length - i;
+    }
+    return 0;
+  }
+
+  function stopCpu() {
+    if (cpuTimer !== null) { clearTimeout(cpuTimer); cpuTimer = null; }
+  }
+
+  function scheduleCpu() {
+    stopCpu();
+    if (!cpuTurn()) return;
+    cpuTimer = setTimeout(function () {
+      cpuTimer = null;
+      if (!cpuTurn()) return;
+      var m = G.chooseMove(state);
+      if (m) apply(m.row, m.col);
+    }, CPU_DELAY);
+  }
+
+  function apply(row, col) {
+    var res = G.play(state, row, col);
+    if (!res.ok) return false;
+    state = res.state;
+    render();
+    scheduleCpu();
+    return true;
+  }
+
+  function restart() {
+    stopCpu();
+    state = G.createGame();
+    render();
+    scheduleCpu();
+  }
+
+  boardEl.addEventListener('click', function (e) {
+    var t = e.target.closest('.cell');
+    if (!t || cpuTurn()) return;
+    var idx = Number(t.dataset.idx);
+    focusIdx = idx;
+    apply(Math.floor(idx / N), idx % N);
+  });
+
+  boardEl.addEventListener('keydown', function (e) {
+    var t = e.target.closest('.cell');
+    if (!t) return;
+    var idx = Number(t.dataset.idx);
+    var r = Math.floor(idx / N);
+    var c = idx % N;
+    var moved = true;
+    if (e.key === 'ArrowUp') r = Math.max(0, r - 1);
+    else if (e.key === 'ArrowDown') r = Math.min(N - 1, r + 1);
+    else if (e.key === 'ArrowLeft') c = Math.max(0, c - 1);
+    else if (e.key === 'ArrowRight') c = Math.min(N - 1, c + 1);
+    else if (e.key === 'Home') c = 0;
+    else if (e.key === 'End') c = N - 1;
+    else moved = false;
+    if (!moved) return;
+    e.preventDefault();
+    cells[focusIdx].tabIndex = -1;
+    focusIdx = r * N + c;
+    cells[focusIdx].tabIndex = 0;
+    cells[focusIdx].focus();
+  });
+
+  undoBtn.addEventListener('click', function () {
+    var n = undoCount();
+    if (!n) return;
+    stopCpu();
+    state = G.undo(state, n);
+    render();
+    scheduleCpu();
+  });
+  restartBtn.addEventListener('click', restart);
+  modeEl.addEventListener('change', restart);
+
+  restart();
 })();
 </script>
 </body>
